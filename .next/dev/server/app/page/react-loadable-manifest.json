@@ -1,0 +1,21 @@
+{
+  "[project]/src/components/RiderMap.tsx [app-client] (ecmascript, next/dynamic entry)": {
+    "id": "[project]/src/components/RiderMap.tsx [app-client] (ecmascript, next/dynamic entry)",
+    "files": [
+      "static/chunks/node_modules_1s5foqe1lm_-i._.js",
+      "static/chunks/src_components_RiderMap_tsx_0hthikzjq8dit._.js"
+    ]
+  },
+  "[project]/src/components/Speedometer.tsx [app-client] (ecmascript, next/dynamic entry)": {
+    "id": "[project]/src/components/Speedometer.tsx [app-client] (ecmascript, next/dynamic entry)",
+    "files": [
+      "static/chunks/src_components_Speedometer_tsx_10lp48bjteyxj._.js"
+    ]
+  },
+  "[project]/src/components/CrashMonitor.tsx [app-client] (ecmascript, next/dynamic entry)": {
+    "id": "[project]/src/components/CrashMonitor.tsx [app-client] (ecmascript, next/dynamic entry)",
+    "files": [
+      "static/chunks/_11-6ty3mfhlve._.js"
+    ]
+  }
+}

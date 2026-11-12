@@ -1,0 +1,6 @@
+{
+  "version": 3,
+  "sources": [],
+  "sections": [
+    {"offset": {"line": 4, "column": 0}, "map": {"version":3,"sources":["file:///C:/Users/SIDDHI/OneDrive/Desktop/VoiceSarathi/src/components/AuthProvider.tsx"],"sourcesContent":["\"use client\";\n\nimport React from \"react\";\nimport { SessionProvider } from \"next-auth/react\";\n\nexport default function AuthProvider({\n  children,\n}: {\n  children: React.ReactNode;\n}) {\n  return <SessionProvider>{children}</SessionProvider>;\n}\n\n"],"names":["AuthProvider","children"],"mappings":";;;;;AAGA;AAHA;;;AAKe,SAASA,aAAa,EACnCC,QAAQ,EAGT;IACC,qBAAO,6LAAC,oKAAe;kBAAEA;;;;;;AAC3B;KANwBD"}}]
+}

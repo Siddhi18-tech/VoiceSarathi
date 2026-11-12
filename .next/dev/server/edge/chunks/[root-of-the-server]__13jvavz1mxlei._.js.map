@@ -1,0 +1,6 @@
+{
+  "version": 3,
+  "sources": [],
+  "sections": [
+    {"offset": {"line": 16, "column": 0}, "map": {"version":3,"sources":["file:///C:/Users/SIDDHI/OneDrive/Desktop/VoiceSarathi/src/middleware.ts"],"sourcesContent":["import { withAuth } from \"next-auth/middleware\";\n\nexport default withAuth({\n  pages: {\n    signIn: \"/login\",\n  },\n});\n\nexport const config = {\n  matcher: [\n    /*\n     * Protect the main rider dashboard root route.\n     * All unauthenticated visitors are redirected to /login.\n     */\n    \"/\",\n  ],\n};\n\n"],"names":["pages","signIn","config","matcher"],"mappings":";;;;;;AAAA;;uCAEe,IAAA,8JAAQ,EAAC;IACtBA,OAAO;QACLC,QAAQ;IACV;AACF;AAEO,MAAMC,SAAS;IACpBC,SAAS;QACP;;;KAGC,GACD;KACD;AACH"}}]
+}
