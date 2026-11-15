@@ -81,40 +81,83 @@ __turbopack_context__.s([
 var __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$server$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__ = __turbopack_context__.i("[project]/node_modules/next/server.js [app-route] (ecmascript)");
 ;
 async function POST(request) {
+    let body;
     try {
-        const body = await request.json();
-        const { transcript } = body;
-        console.log("[API /api/extract-destination] Received transcript:", transcript);
-        // Simple heuristic parser for demo & testing with bn-IN or English transcripts
-        let destination = "Mock Destination";
-        if (transcript && typeof transcript === "string") {
-            const lower = transcript.toLowerCase();
-            if (lower.includes("howrah") || lower.includes("হাওড়া")) {
-                destination = "Howrah Railway Station";
-            } else if (lower.includes("airport") || lower.includes("বিমানবন্দর")) {
-                destination = "Netaji Subhash Chandra Bose Airport (CCU)";
-            } else if (lower.includes("salt lake") || lower.includes("সল্টলেক")) {
-                destination = "Salt Lake Sector V, Kolkata";
-            } else if (lower.includes("park street") || lower.includes("পার্ক স্ট্রিট")) {
-                destination = "Park Street, Kolkata";
-            } else if (lower.includes("victoria") || lower.includes("ভিক্টোরিয়া")) {
-                destination = "Victoria Memorial, Kolkata";
-            } else if (transcript.trim().length > 0) {
-                destination = `Extracted: ${transcript.trim()}`;
-            }
-        }
+        body = await request.json();
+    } catch  {
         return __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$server$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__["NextResponse"].json({
-            destination: destination || "Mock Destination",
-            success: true,
-            timestamp: new Date().toISOString()
-        });
-    } catch (error) {
-        console.error("[API Error] Failed to parse request payload:", error);
-        return __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$server$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__["NextResponse"].json({
-            destination: "Mock Destination",
-            error: "Failed to parse transcript"
+            error: "Request body must be valid JSON."
         }, {
             status: 400
+        });
+    }
+    const transcript = body?.transcript;
+    if (typeof transcript !== "string" || transcript.trim().length === 0) {
+        return __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$server$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__["NextResponse"].json({
+            error: "transcript must be a non-empty string."
+        }, {
+            status: 400
+        });
+    }
+    const apiKey = process.env.GEMINI_API_KEY;
+    if (!apiKey) {
+        return __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$server$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__["NextResponse"].json({
+            error: "Destination extraction is not configured."
+        }, {
+            status: 503
+        });
+    }
+    const model = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
+    try {
+        const response = await fetch(`https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`, {
+            method: "POST",
+            headers: {
+                "Content-Type": "application/json",
+                "x-goog-api-key": apiKey
+            },
+            body: JSON.stringify({
+                contents: [
+                    {
+                        parts: [
+                            {
+                                text: `Extract ONLY the final geographical destination from this user's speech. Ignore conversational filler words in any Indian language. Reply with JUST the destination name.\n\nUser speech: ${transcript}`
+                            }
+                        ]
+                    }
+                ],
+                generationConfig: {
+                    maxOutputTokens: 80
+                }
+            }),
+            signal: AbortSignal.timeout(15_000)
+        });
+        if (!response.ok) {
+            console.error("[extract-destination] Gemini request failed:", response.status, await response.text());
+            return __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$server$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__["NextResponse"].json({
+                error: "Could not extract a destination."
+            }, {
+                status: 502
+            });
+        }
+        const result = await response.json();
+        const rawDestination = result?.candidates?.[0]?.content?.parts?.map((part)=>part.text || "").join(" ");
+        const destination = typeof rawDestination === "string" ? rawDestination.trim().replace(/^['"`]+|['"`]+$/g, "").replace(/^destination:\s*/i, "").trim() : "";
+        if (!destination) {
+            return __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$server$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__["NextResponse"].json({
+                error: "No destination was found in the transcript."
+            }, {
+                status: 422
+            });
+        }
+        return __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$server$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__["NextResponse"].json({
+            destination
+        });
+    } catch (error) {
+        console.error("[extract-destination] Gemini request error:", error);
+        return __TURBOPACK__imported__module__$5b$project$5d2f$node_modules$2f$next$2f$server$2e$js__$5b$app$2d$route$5d$__$28$ecmascript$29$__["NextResponse"].json({
+            error: "Destination extraction is temporarily unavailable."
+        }, {
+            status: 502
         });
     }
 }
