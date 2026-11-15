@@ -1,47 +1,45 @@
 import { NextResponse } from "next/server";
-
-interface SOSPayload {
-  timestamp: string;
-  lat?: number;
-  lng?: number;
-  emergencyContact?: string;
-  accelerationMagnitude?: number;
-  riderStatus?: string;
-}
+import { isLatitude, isLongitude } from "@/lib/validation";
 
 export async function POST(request: Request) {
+  let body: unknown;
   try {
-    const body: SOSPayload = await request.json().catch(() => ({}));
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ success: false, error: "Request body must be valid JSON." }, { status: 400 });
+  }
 
-    const payload: SOSPayload = {
-      timestamp: new Date().toISOString(),
-      lat: body.lat,
-      lng: body.lng,
-      emergencyContact: body.emergencyContact ?? "Not provided",
-      accelerationMagnitude: body.accelerationMagnitude,
-      riderStatus: body.riderStatus ?? "UNKNOWN",
-    };
+  const input = body as { lat?: unknown; lng?: unknown; type?: unknown } | null;
+  if (!input || !isLatitude(input.lat) || !isLongitude(input.lng) ||
+      (input.type !== "crash" && input.type !== "voice")) {
+    return NextResponse.json({ success: false, error: "lat, lng, and a valid type are required." }, { status: 400 });
+  }
 
-    console.error("[SOS ALERT] 🚨 Emergency SOS triggered:", JSON.stringify(payload, null, 2));
+  const token = process.env.TELEGRAM_BOT_TOKEN;
+  const chatId = process.env.TELEGRAM_CHAT_ID;
+  if (!token || !chatId) {
+    return NextResponse.json({ success: false, error: "SOS dispatch is not configured." }, { status: 503 });
+  }
 
-    // In production: integrate Twilio / FCM / backend notification here.
+  const title = input.type === "crash" ? "🚨 CRASH DETECTED" : "🚨 RIDER SOS REQUESTED";
+  const location = `https://www.google.com/maps?q=${input.lat},${input.lng}`;
+  try {
+    const response = await fetch(`https://api.telegram.org/bot${token}/sendMessage`, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ chat_id: chatId, text: `${title}. Live location: ${location}` }),
+      signal: AbortSignal.timeout(10_000),
+    });
+    const result = await response.json();
+    if (!response.ok || !result.ok) {
+      console.error("[sos] Telegram dispatch failed:", response.status, result.description);
+      return NextResponse.json({ success: false, error: "SOS dispatch failed." }, { status: 502 });
+    }
 
-    return NextResponse.json(
-      {
-        success: true,
-        message: "SOS beacon dispatched to emergency contact.",
-        alertId: `SOS-${Date.now()}`,
-        timestamp: payload.timestamp,
-        emergencyContact: payload.emergencyContact,
-      },
-      { status: 200 }
-    );
-  } catch (err) {
-    console.error("[SOS API] Error:", err);
-    return NextResponse.json(
-      { success: false, message: "SOS dispatch failed." },
-      { status: 500 }
-    );
+    return NextResponse.json({ success: true });
+  } catch (error) {
+    console.error("[sos] Telegram request error:", error);
+    return NextResponse.json({ success: false, error: "SOS dispatch failed." }, { status: 502 });
   }
 }
 

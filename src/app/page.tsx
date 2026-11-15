@@ -63,8 +63,11 @@ const DEFAULT_SETTINGS: RiderSettings = {
   emergencyContact: "",
 };
 
-// Encoded Polyline: Kolkata Park Street / Esplanade to Howrah Station via Howrah Bridge
-const DEMO_ENCODED_ROUTE = "wuwhCkqizO_Nzc@g^~p@ka@vj@oFbQ";
+type RouteApiResponse = {
+  polyline?: string;
+  steps?: Array<{ instruction: string; distance: number }>;
+  error?: string;
+};
 
 export default function RiderDashboard() {
   const { data: session } = useSession();
@@ -79,6 +82,11 @@ export default function RiderDashboard() {
   const [currentDestination, setCurrentDestination] = useState("Tap earphone button to set route");
   const [highContrastMode, setHighContrastMode] = useState(true);
   const [showRoute, setShowRoute] = useState(false);
+  const [routePolyline, setRoutePolyline] = useState<string>();
+  const [routeSteps, setRouteSteps] = useState<RouteApiResponse["steps"]>([]);
+  const [isRouting, setIsRouting] = useState(false);
+  const [routeError, setRouteError] = useState<string | null>(null);
+  const [tripLogMessage, setTripLogMessage] = useState<string | null>(null);
 
   // ── Settings state ───────────────────────────────────────────────
   const [settings, setSettings] = useState<RiderSettings>(DEFAULT_SETTINGS);
@@ -87,6 +95,10 @@ export default function RiderDashboard() {
   // ── Refs ─────────────────────────────────────────────────────────
   const wakeLockSentinelRef = useRef<any>(null);
   const crashMonitorRef = useRef<CrashMonitorHandle>(null);
+  const rideStartedAtRef = useRef<Date | null>(null);
+  const rideDistanceMetersRef = useRef(0);
+  const previousRidePositionRef = useRef<{ lat: number; lng: number } | null>(null);
+  const maxRideSpeedRef = useRef(0);
 
   // Google Maps API key placeholder
   const googleMapsApiKey =
@@ -141,6 +153,24 @@ export default function RiderDashboard() {
 
   useEffect(() => () => releaseScreenWakeLock(), [releaseScreenWakeLock]);
 
+  useEffect(() => {
+    if (!isRideActive || !navigator.geolocation) return;
+    const watchId = navigator.geolocation.watchPosition((position) => {
+      const current = { lat: position.coords.latitude, lng: position.coords.longitude };
+      const previous = previousRidePositionRef.current;
+      if (previous) {
+        const toRadians = (degrees: number) => degrees * Math.PI / 180;
+        const dLat = toRadians(current.lat - previous.lat);
+        const dLng = toRadians(current.lng - previous.lng);
+        const a = Math.sin(dLat / 2) ** 2 +
+          Math.cos(toRadians(previous.lat)) * Math.cos(toRadians(current.lat)) * Math.sin(dLng / 2) ** 2;
+        rideDistanceMetersRef.current += 6_371_000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+      }
+      previousRidePositionRef.current = current;
+    }, () => {}, { enableHighAccuracy: true, maximumAge: 1000 });
+    return () => navigator.geolocation.clearWatch(watchId);
+  }, [isRideActive]);
+
   // ── Ride start / end ─────────────────────────────────────────────
   const handleStartRide = async () => {
     if (!ambientModeConfirmed) return;
@@ -148,6 +178,11 @@ export default function RiderDashboard() {
       navigator.vibrate([100, 50, 100]);
     }
     await requestScreenWakeLock();
+    rideStartedAtRef.current = new Date();
+    rideDistanceMetersRef.current = 0;
+    previousRidePositionRef.current = null;
+    maxRideSpeedRef.current = 0;
+    setTripLogMessage(null);
     setIsRideActive(true);
   };
 
@@ -155,16 +190,84 @@ export default function RiderDashboard() {
     if (typeof window !== "undefined" && "vibrate" in navigator) {
       navigator.vibrate(200);
     }
+    const startedAt = rideStartedAtRef.current;
+    if (startedAt) {
+      void (async () => {
+        try {
+          const response = await fetch("/api/log-trip", {
+            method: "POST",
+            headers: { "Content-Type": "application/json" },
+            body: JSON.stringify({
+              distance_km: rideDistanceMetersRef.current / 1000,
+              max_speed: maxRideSpeedRef.current,
+              language_used: settings.language,
+              timestamp: new Date().toISOString(),
+            }),
+          });
+          const result = await response.json();
+          if (!response.ok) throw new Error(result.error || "Trip could not be saved.");
+          setTripLogMessage("Trip saved to your safety impact log.");
+        } catch {
+          setTripLogMessage("Trip ended, but could not be saved. Check your connection and sign-in.");
+        }
+      })();
+    }
+    rideStartedAtRef.current = null;
     releaseScreenWakeLock();
     setIsRideActive(false);
     setAmbientModeConfirmed(false);
     setShowRoute(false);
+    setRoutePolyline(undefined);
+    setRouteSteps([]);
+    setRouteError(null);
     setCurrentDestination("Tap earphone button to set route");
   };
 
-  const handleDestinationFound = (destination: string) => {
+  const handleSpeedUpdate = useCallback((speedKmh: number) => {
+    if (isRideActive) maxRideSpeedRef.current = Math.max(maxRideSpeedRef.current, speedKmh);
+  }, [isRideActive]);
+
+  const handleDestinationFound = async (destination: string) => {
     setCurrentDestination(destination);
-    setShowRoute(true);
+    setShowRoute(false);
+    setRoutePolyline(undefined);
+    setRouteSteps([]);
+    setRouteError(null);
+    setIsRouting(true);
+
+    try {
+      const position = await new Promise<GeolocationPosition>((resolve, reject) => {
+        if (!navigator.geolocation) {
+          reject(new Error("Location access is unavailable on this device."));
+          return;
+        }
+        navigator.geolocation.getCurrentPosition(resolve, () => reject(new Error("Allow location access to create a route.")), {
+          enableHighAccuracy: true,
+          timeout: 10_000,
+          maximumAge: 10_000,
+        });
+      });
+      const response = await fetch("/api/route", {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          currentLat: position.coords.latitude,
+          currentLng: position.coords.longitude,
+          destination,
+        }),
+      });
+      const data: RouteApiResponse = await response.json();
+      if (!response.ok || !data.polyline) {
+        throw new Error(data.error || "Could not create a route to that destination.");
+      }
+      setRoutePolyline(data.polyline);
+      setRouteSteps(data.steps || []);
+      setShowRoute(true);
+    } catch (error) {
+      setRouteError(error instanceof Error ? error.message : "Could not create a route.");
+    } finally {
+      setIsRouting(false);
+    }
   };
 
   const handleSaveSettings = (s: RiderSettings) => {
@@ -435,15 +538,30 @@ export default function RiderDashboard() {
           {/* ------------------------------------------------------------- */}
           <RiderMap
             apiKey={googleMapsApiKey}
-            routePolyline={showRoute ? DEMO_ENCODED_ROUTE : undefined}
+            routePolyline={showRoute ? routePolyline : undefined}
             height="380px"
           >
             {/* Speedometer prominently displayed as a bold HUD overlay on top of the dashboard map */}
             <Speedometer
               speedLimit={settings.speedLimit}
               overlayMode={true}
+              onSpeedUpdate={handleSpeedUpdate}
             />
           </RiderMap>
+          {isRouting && <p className="text-xs font-mono text-cyan-300">Finding a two-wheeler route…</p>}
+          {routeError && <p role="alert" className="text-xs font-mono text-rose-300">{routeError}</p>}
+          {showRoute && <p className="text-[11px] text-amber-200">Two-wheeler routes are in beta. Follow road signs and local traffic rules.</p>}
+          {tripLogMessage && <p role="status" className="text-xs font-mono text-neutral-300">{tripLogMessage}</p>}
+          {showRoute && routeSteps && routeSteps.length > 0 && (
+            <ol aria-label="Route directions" className="space-y-2 rounded-xl border border-neutral-800 bg-black p-3">
+              {routeSteps.slice(0, 4).map((step, index) => (
+                <li key={`${index}-${step.instruction}`} className="flex gap-3 text-xs text-neutral-200">
+                  <span className="font-mono text-[#00f0ff]">{step.distance} m</span>
+                  <span>{step.instruction}</span>
+                </li>
+              ))}
+            </ol>
+          )}
 
           {/* Crash Monitor Status & Emergency Overlay */}
           <CrashMonitor

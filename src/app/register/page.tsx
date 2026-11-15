@@ -7,6 +7,7 @@ import { signIn } from "next-auth/react";
 import {
   User,
   Mail,
+  Phone,
   Lock,
   ArrowRight,
   Eye,
@@ -22,6 +23,7 @@ export default function RegisterPage() {
 
   const [name, setName] = useState("");
   const [email, setEmail] = useState("");
+  const [emergencyContact, setEmergencyContact] = useState("");
   const [password, setPassword] = useState("");
   const [showPassword, setShowPassword] = useState(false);
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
@@ -60,6 +62,7 @@ export default function RegisterPage() {
           name: name.trim(),
           email: email.trim().toLowerCase(),
           password: password,
+          emergencyContact: emergencyContact.trim() || null,
         }),
       });
 
@@ -172,6 +175,29 @@ export default function RegisterPage() {
                 onChange={(e) => setEmail(e.target.value)}
                 placeholder="rohan@example.com"
                 required
+                disabled={isLoading}
+                className="w-full bg-neutral-900 border-2 border-neutral-700 rounded-xl pl-10 pr-4 py-3 text-white text-sm font-medium placeholder-neutral-500 focus:outline-none focus:border-[#00ff88] transition-colors"
+              />
+            </div>
+          </div>
+
+          {/* Emergency Contact (optional) */}
+          <div>
+            <label
+              htmlFor="emergency-contact-input"
+              className="block text-xs font-mono font-bold uppercase tracking-wider text-neutral-300 mb-1.5"
+            >
+              Emergency Contact <span className="normal-case text-neutral-500">(optional)</span>
+            </label>
+            <div className="relative">
+              <Phone className="w-4 h-4 text-neutral-500 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                id="emergency-contact-input"
+                type="tel"
+                value={emergencyContact}
+                onChange={(e) => setEmergencyContact(e.target.value)}
+                placeholder="+91 98765 43210"
+                maxLength={40}
                 disabled={isLoading}
                 className="w-full bg-neutral-900 border-2 border-neutral-700 rounded-xl pl-10 pr-4 py-3 text-white text-sm font-medium placeholder-neutral-500 focus:outline-none focus:border-[#00ff88] transition-colors"
               />

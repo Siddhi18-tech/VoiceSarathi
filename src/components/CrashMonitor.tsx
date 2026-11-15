@@ -105,18 +105,19 @@ function CrashMonitorInner(
       });
     } catch {}
 
-    const payload = {
-      timestamp: new Date().toISOString(),
-      lat,
-      lng,
+    const payload = { lat, lng, type: "crash" as const };
+
+    console.error("[CrashMonitor] 🚨 Auto-dispatching SOS:", {
+      ...payload,
       emergencyContact: emergencyContact || "Not provided",
       accelerationMagnitude: lastMagnitude,
       riderStatus: "UNRESPONSIVE",
-    };
-
-    console.error("[CrashMonitor] 🚨 Auto-dispatching SOS:", payload);
+    });
 
     try {
+      if (lat === undefined || lng === undefined) {
+        throw new Error("Current location is unavailable.");
+      }
       const res = await fetch("/api/sos", {
         method: "POST",
         headers: { "Content-Type": "application/json" },
@@ -124,12 +125,14 @@ function CrashMonitorInner(
       });
       const data = await res.json();
       console.log("[CrashMonitor] SOS response:", data);
+      if (!res.ok || !data.success) throw new Error(data.error || "SOS dispatch failed.");
+      setStatus("sos_sent");
+      speakAlert("SOS sent. Your emergency contact has been notified.");
     } catch (err) {
       console.error("[CrashMonitor] SOS dispatch network error:", err);
+      setSosSent(false);
+      speakAlert("SOS could not be sent. Call your emergency contact now.");
     }
-
-    setStatus("sos_sent");
-    speakAlert("SOS sent. Emergency services have been notified.");
   }, [sosSent, emergencyContact, lastMagnitude, setStatus, speakAlert]);
 
   // ── Stop countdown ───────────────────────────────────────────────

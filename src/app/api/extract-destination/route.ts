@@ -1,43 +1,59 @@
 import { NextResponse } from "next/server";
 
 export async function POST(request: Request) {
+  let body: unknown;
   try {
-    const body = await request.json();
-    const { transcript } = body;
+    body = await request.json();
+  } catch {
+    return NextResponse.json({ error: "Request body must be valid JSON." }, { status: 400 });
+  }
 
-    console.log("[API /api/extract-destination] Received transcript:", transcript);
+  const transcript = (body as { transcript?: unknown } | null)?.transcript;
+  if (typeof transcript !== "string" || transcript.trim().length === 0) {
+    return NextResponse.json({ error: "transcript must be a non-empty string." }, { status: 400 });
+  }
 
-    // Simple heuristic parser for demo & testing with bn-IN or English transcripts
-    let destination = "Mock Destination";
+  const apiKey = process.env.GEMINI_API_KEY;
+  if (!apiKey) {
+    return NextResponse.json({ error: "Destination extraction is not configured." }, { status: 503 });
+  }
 
-    if (transcript && typeof transcript === "string") {
-      const lower = transcript.toLowerCase();
-      if (lower.includes("howrah") || lower.includes("হাওড়া")) {
-        destination = "Howrah Railway Station";
-      } else if (lower.includes("airport") || lower.includes("বিমানবন্দর")) {
-        destination = "Netaji Subhash Chandra Bose Airport (CCU)";
-      } else if (lower.includes("salt lake") || lower.includes("সল্টলেক")) {
-        destination = "Salt Lake Sector V, Kolkata";
-      } else if (lower.includes("park street") || lower.includes("পার্ক স্ট্রিট")) {
-        destination = "Park Street, Kolkata";
-      } else if (lower.includes("victoria") || lower.includes("ভিক্টোরিয়া")) {
-        destination = "Victoria Memorial, Kolkata";
-      } else if (transcript.trim().length > 0) {
-        destination = `Extracted: ${transcript.trim()}`;
+  const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+  try {
+    const response = await fetch(
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
+      {
+        method: "POST",
+        headers: { "Content-Type": "application/json" },
+        body: JSON.stringify({
+          contents: [{ parts: [{ text: `Extract ONLY the final geographical destination from this user's speech. Ignore conversational filler words in any Indian language. Reply with JUST the destination name.\n\nUser speech: ${transcript}` }] }],
+          generationConfig: { temperature: 0.1, maxOutputTokens: 80 },
+        }),
+        signal: AbortSignal.timeout(15_000),
       }
+    );
+
+    if (!response.ok) {
+      console.error("[extract-destination] Gemini request failed:", response.status, await response.text());
+      return NextResponse.json({ error: "Could not extract a destination." }, { status: 502 });
     }
 
-    return NextResponse.json({
-      destination: destination || "Mock Destination",
-      success: true,
-      timestamp: new Date().toISOString(),
-    });
+    const result = await response.json();
+    const rawDestination = result?.candidates?.[0]?.content?.parts
+      ?.map((part: { text?: string }) => part.text || "")
+      .join(" ");
+    const destination = typeof rawDestination === "string"
+      ? rawDestination.trim().replace(/^['"`]+|['"`]+$/g, "").replace(/^destination:\s*/i, "").trim()
+      : "";
+
+    if (!destination) {
+      return NextResponse.json({ error: "No destination was found in the transcript." }, { status: 422 });
+    }
+
+    return NextResponse.json({ destination });
   } catch (error) {
-    console.error("[API Error] Failed to parse request payload:", error);
-    return NextResponse.json(
-      { destination: "Mock Destination", error: "Failed to parse transcript" },
-      { status: 400 }
-    );
+    console.error("[extract-destination] Gemini request error:", error);
+    return NextResponse.json({ error: "Destination extraction is temporarily unavailable." }, { status: 502 });
   }
 }
 

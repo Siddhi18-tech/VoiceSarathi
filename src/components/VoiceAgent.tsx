@@ -13,8 +13,6 @@ interface VoiceAgentProps {
 
 interface DestinationApiResponse {
   destination: string;
-  success?: boolean;
-  timestamp?: string;
   error?: string;
 }
 
@@ -37,7 +35,7 @@ export default function VoiceAgent({
   const isListeningRef = useRef<boolean>(false);
 
   // -------------------------------------------------------------
-  // 1. Send Captured Transcript to Backend / Mock API
+  // 1. Send captured speech to the destination extraction API
   // -------------------------------------------------------------
   const sendTranscriptToApi = useCallback(
     async (capturedText: string) => {
@@ -56,19 +54,17 @@ export default function VoiceAgent({
         });
 
         if (!response.ok) {
-          throw new Error(`HTTP error! status: ${response.status}`);
+          const data = await response.json().catch(() => ({}));
+          throw new Error(data.error || `Destination extraction failed (${response.status}).`);
         }
 
         const data: DestinationApiResponse = await response.json();
-
-        // Exact mock log required by prompt specification:
-        console.log({ destination: data.destination || "Mock Destination" });
-
-        setLastExtractedDestination(data.destination || "Mock Destination");
+        if (!data.destination) throw new Error("No destination was returned.");
+        setLastExtractedDestination(data.destination);
         setVoiceStatus("success");
 
         if (onDestinationExtracted) {
-          onDestinationExtracted(data.destination || "Mock Destination", capturedText);
+          onDestinationExtracted(data.destination, capturedText);
         }
 
         // Haptic feedback for rider acknowledgment
@@ -82,19 +78,8 @@ export default function VoiceAgent({
         }, 4000);
       } catch (err) {
         console.error("[VoiceAgent] Destination extraction failed:", err);
-        // Fallback simulation in case network is disconnected
-        const fallbackDestination = "Mock Destination";
-        console.log({ destination: fallbackDestination });
-        setLastExtractedDestination(fallbackDestination);
-        setVoiceStatus("success");
-
-        if (onDestinationExtracted) {
-          onDestinationExtracted(fallbackDestination, capturedText);
-        }
-
-        setTimeout(() => {
-          setVoiceStatus("idle");
-        }, 4000);
+        setErrorMessage(err instanceof Error ? err.message : "Destination extraction failed.");
+        setVoiceStatus("error");
       }
     },
     [onDestinationExtracted]
