@@ -1,26 +1,67 @@
 "use client";
 
 import React, { useEffect, useRef, useState, useCallback } from "react";
-import { Mic, Headphones, Volume2, Radio, CheckCircle2, AlertTriangle, Loader2 } from "lucide-react";
+import {
+  Mic,
+  Headphones,
+  Volume2,
+  CheckCircle2,
+  AlertTriangle,
+  Loader2,
+  ArrowRight,
+  Keyboard,
+  Check,
+  Navigation,
+  X,
+} from "lucide-react";
 
 export type VoiceState = "idle" | "listening" | "processing" | "success" | "error";
 
 interface VoiceAgentProps {
   defaultLanguage?: string;
-  onDestinationExtracted?: (destination: string, transcript: string) => void;
+  onDestinationExtracted?: (
+    destination: string | null,
+    transcript: string,
+    via?: string | null,
+    isRerouteOnly?: boolean
+  ) => void;
   isRideActive?: boolean;
+  onDeselect?: () => void;
+  pendingDestination?: string | null;
+  theme?: "dark" | "light";
 }
 
 interface DestinationApiResponse {
-  destination: string;
+  destination?: string | null;
+  via?: string | null;
+  isRerouteOnly?: boolean;
   error?: string;
 }
+
+const QUICK_KOLKATA_CHIPS = [
+  "🏠 Home",
+  "💼 Work",
+  "🎓 College",
+  "Nearest Metro",
+  "Nearest Fine Dine Cafe",
+  "Nearest Petrol Pump",
+  "South City Mall",
+  "Howrah Station via Howrah Bridge",
+  "Kolkata Airport",
+  "Eco Park",
+  "Victoria Memorial",
+];
 
 export default function VoiceAgent({
   defaultLanguage = "bn-IN",
   onDestinationExtracted,
   isRideActive = true,
+  onDeselect,
+  pendingDestination,
+  theme = "dark",
 }: VoiceAgentProps) {
+  const isLight = theme === "light";
+  const [selectedLanguage, setSelectedLanguage] = useState<string>(defaultLanguage);
   const [voiceStatus, setVoiceStatus] = useState<VoiceState>("idle");
   const [transcript, setTranscript] = useState<string>("");
   const [interimText, setInterimText] = useState<string>("");
@@ -28,21 +69,40 @@ export default function VoiceAgent({
   const [errorMessage, setErrorMessage] = useState<string | null>(null);
   const [isSupported, setIsSupported] = useState<boolean>(true);
   const [mediaSessionActive, setMediaSessionActive] = useState<boolean>(false);
-  const [audioPlaying, setAudioPlaying] = useState<boolean>(false);
+  const [manualInput, setManualInput] = useState<string>("");
 
-  const audioRef = useRef<HTMLAudioElement | null>(null);
   const recognitionRef = useRef<any>(null);
   const isListeningRef = useRef<boolean>(false);
+  const isStartingRef = useRef<boolean>(false);
+  const silenceTimerRef = useRef<NodeJS.Timeout | null>(null);
+  const latestSpeechRef = useRef<string>("");
+
+  // Sync default language if prop updates
+  useEffect(() => {
+    setSelectedLanguage(defaultLanguage);
+  }, [defaultLanguage]);
+
+  // Sync if pendingDestination was cleared or deselected from parent
+  useEffect(() => {
+    if (pendingDestination === null) {
+      setLastExtractedDestination(null);
+    }
+  }, [pendingDestination]);
 
   // -------------------------------------------------------------
-  // 1. Send captured speech to the destination extraction API
+  // 1. Send captured speech/text to extraction API
   // -------------------------------------------------------------
   const sendTranscriptToApi = useCallback(
     async (capturedText: string) => {
-      if (!capturedText.trim()) return;
+      const query = capturedText.trim();
+      if (!query) {
+        setVoiceStatus("idle");
+        return;
+      }
 
       setVoiceStatus("processing");
-      console.log("[VoiceAgent] Sending transcript for destination extraction:", capturedText);
+      setErrorMessage(null);
+      console.log("[VoiceAgent] Processing location query:", query);
 
       try {
         const response = await fetch("/api/extract-destination", {
@@ -50,242 +110,308 @@ export default function VoiceAgent({
           headers: {
             "Content-Type": "application/json",
           },
-          body: JSON.stringify({ transcript: capturedText }),
+          body: JSON.stringify({ transcript: query }),
         });
 
-        if (!response.ok) {
-          const data = await response.json().catch(() => ({}));
-          throw new Error(data.error || `Destination extraction failed (${response.status}).`);
+        let data: DestinationApiResponse = {};
+        try {
+          data = await response.json();
+        } catch {
+          data = {};
         }
 
-        const data: DestinationApiResponse = await response.json();
-        if (!data.destination) throw new Error("No destination was returned.");
-        setLastExtractedDestination(data.destination);
-        setVoiceStatus("success");
+        // Even if extraction API returned empty or partial result, fallback to query directly
+        const resolvedDest = data.destination || (!data.via ? query : null);
+        const resolvedVia = data.via || null;
+        const isReroute = Boolean(data.isRerouteOnly);
 
-        if (onDestinationExtracted) {
-          onDestinationExtracted(data.destination, capturedText);
+        if (!resolvedDest && !resolvedVia) {
+          const fallbackDest = query;
+          setLastExtractedDestination(fallbackDest);
+          setVoiceStatus("success");
+          if (onDestinationExtracted) {
+            onDestinationExtracted(fallbackDest, query, null, false);
+          }
+        } else {
+          const displayLabel = resolvedVia
+            ? resolvedDest
+              ? `${resolvedDest} (via ${resolvedVia})`
+              : `Reroute via ${resolvedVia}`
+            : resolvedDest || query;
+
+          setLastExtractedDestination(displayLabel);
+          setVoiceStatus("success");
+
+          if (onDestinationExtracted) {
+            onDestinationExtracted(resolvedDest, query, resolvedVia, isReroute);
+          }
         }
 
-        // Haptic feedback for rider acknowledgment
         if (typeof window !== "undefined" && "vibrate" in navigator) {
           navigator.vibrate([80, 50, 80]);
         }
 
-        // Reset status to idle after a few seconds
         setTimeout(() => {
           setVoiceStatus("idle");
         }, 4000);
-      } catch (err) {
-        console.error("[VoiceAgent] Destination extraction failed:", err);
-        setErrorMessage(err instanceof Error ? err.message : "Destination extraction failed.");
-        setVoiceStatus("error");
+      } catch (err: any) {
+        console.warn("[VoiceAgent] Non-fatal extraction notice, fallback to raw query:", err?.message || err);
+        setLastExtractedDestination(query);
+        setVoiceStatus("success");
+        if (onDestinationExtracted) {
+          onDestinationExtracted(query, query, null, false);
+        }
+        setTimeout(() => {
+          setVoiceStatus("idle");
+        }, 4000);
       }
     },
     [onDestinationExtracted]
   );
 
   // -------------------------------------------------------------
-  // 2. Start Speech Recognition (bn-IN default)
+  // 2. Commit Speech & Submit
+  // -------------------------------------------------------------
+  const commitSpeechAndSend = useCallback(() => {
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.stop();
+      } catch { }
+    }
+
+    isListeningRef.current = false;
+    isStartingRef.current = false;
+
+    const textToSend = latestSpeechRef.current.trim();
+    if (textToSend) {
+      setTranscript(textToSend);
+      setInterimText("");
+      sendTranscriptToApi(textToSend);
+    } else {
+      setVoiceStatus("idle");
+    }
+  }, [sendTranscriptToApi]);
+
+  // -------------------------------------------------------------
+  // 3. Start Continuous Speech Recognition with Silence Buffer
   // -------------------------------------------------------------
   const startListening = useCallback(() => {
-    if (!isSupported) {
-      setErrorMessage("Speech Recognition is not supported on this browser.");
+    if (typeof window === "undefined") return;
+
+    // Immediately stop any text-to-speech so AI voice never talks over rider or blocks mic
+    if ("speechSynthesis" in window) {
+      try {
+        window.speechSynthesis.cancel();
+      } catch { }
+    }
+
+    const SpeechRecognitionClass =
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition;
+
+    if (!SpeechRecognitionClass) {
+      setIsSupported(false);
+      setErrorMessage("Speech Recognition is not supported on this browser. Please use the manual location entry below.");
       return;
     }
 
-    if (isListeningRef.current) {
-      console.log("[VoiceAgent] Recognition already in progress. Ignoring trigger.");
+    // Prevent double-start if already initializing or listening
+    if (isStartingRef.current || isListeningRef.current) {
+      console.log("[VoiceAgent] Already initializing or listening.");
       return;
     }
+
+    if (silenceTimerRef.current) {
+      clearTimeout(silenceTimerRef.current);
+      silenceTimerRef.current = null;
+    }
+
+    // Safely remove listeners from existing instance
+    if (recognitionRef.current) {
+      try {
+        recognitionRef.current.onstart = null;
+        recognitionRef.current.onresult = null;
+        recognitionRef.current.onerror = null;
+        recognitionRef.current.onend = null;
+        recognitionRef.current.abort();
+      } catch { }
+      recognitionRef.current = null;
+    }
+
+    latestSpeechRef.current = "";
+    setTranscript("");
+    setInterimText("");
+    setErrorMessage(null);
+    isStartingRef.current = true;
+    setVoiceStatus("listening");
 
     try {
-      const SpeechRecognitionClass =
-        window.SpeechRecognition || window.webkitSpeechRecognition;
-
-      if (!SpeechRecognitionClass) {
-        setIsSupported(false);
-        setErrorMessage("Speech Recognition API unavailable in window.");
-        return;
-      }
-
-      // Re-create instance to avoid stale state in some browser implementations
       const recognition = new SpeechRecognitionClass();
-      recognition.lang = defaultLanguage; // 'bn-IN' (Bengali - India)
-      recognition.continuous = false;
+      recognition.lang = selectedLanguage;
+      recognition.continuous = true;
       recognition.interimResults = true;
       recognition.maxAlternatives = 1;
 
       recognition.onstart = () => {
+        isStartingRef.current = false;
         isListeningRef.current = true;
         setVoiceStatus("listening");
-        setErrorMessage(null);
-        setInterimText("");
-        console.log(`[VoiceAgent] Speech recognition activated (Language: ${defaultLanguage})`);
-
-        // Haptic tap to inform rider listening has commenced
+        console.log(`[VoiceAgent] Speech recognition active (${selectedLanguage})`);
         if (typeof window !== "undefined" && "vibrate" in navigator) {
           navigator.vibrate(50);
         }
       };
 
       recognition.onresult = (event: any) => {
+        let accumulatedFinal = "";
         let currentInterim = "";
-        let finalTranscriptAccumulated = "";
 
-        for (let i = event.resultIndex; i < event.results.length; ++i) {
+        for (let i = 0; i < event.results.length; ++i) {
           const result = event.results[i];
           if (result.isFinal) {
-            finalTranscriptAccumulated += result[0].transcript;
+            accumulatedFinal += result[0].transcript + " ";
           } else {
             currentInterim += result[0].transcript;
           }
         }
 
+        const fullSpeech = (accumulatedFinal + " " + currentInterim).trim();
+        latestSpeechRef.current = fullSpeech;
+
         if (currentInterim) {
           setInterimText(currentInterim);
         }
-
-        if (finalTranscriptAccumulated) {
-          setTranscript(finalTranscriptAccumulated);
-          setInterimText("");
-          sendTranscriptToApi(finalTranscriptAccumulated);
+        if (accumulatedFinal) {
+          setTranscript(accumulatedFinal.trim());
         }
+
+        // Wait 2200ms of comfortable silence before auto-submitting
+        if (silenceTimerRef.current) {
+          clearTimeout(silenceTimerRef.current);
+        }
+        silenceTimerRef.current = setTimeout(() => {
+          console.log("[VoiceAgent] Silence detected. Committing speech:", latestSpeechRef.current);
+          commitSpeechAndSend();
+        }, 2200);
       };
 
       recognition.onerror = (event: any) => {
-        console.warn("[VoiceAgent] Speech recognition event error:", event.error);
+        isStartingRef.current = false;
+        console.warn("[VoiceAgent] Speech notice event:", event.error);
+
+        // 'aborted' is triggered during clean stop/restart - NOT an error!
+        if (event.error === "aborted") {
+          return;
+        }
+
+        // 'no-speech' is a normal timeout when no words were captured
+        if (event.error === "no-speech") {
+          if (!latestSpeechRef.current.trim()) {
+            setVoiceStatus("idle");
+            isListeningRef.current = false;
+          }
+          return;
+        }
+
         isListeningRef.current = false;
 
-        if (event.error === "no-speech") {
-          setErrorMessage("No speech detected. Please speak closer to helmet mic.");
-        } else if (event.error === "not-allowed") {
-          setErrorMessage("Microphone permission denied. Enable microphone access.");
+        if (event.error === "not-allowed") {
+          setErrorMessage("Microphone access blocked. Click the lock/settings icon in your browser address bar to allow mic access.");
+        } else if (event.error === "audio-capture") {
+          setErrorMessage("No microphone detected. Please check your mic connection or use manual location entry below.");
+        } else if (event.error === "network") {
+          setErrorMessage("Network issue with speech recognition. Retrying or use manual entry.");
         } else {
-          setErrorMessage(`Audio error: ${event.error}`);
+          setErrorMessage(`Speech notice: ${event.error}. You can also type your destination below.`);
         }
 
         setVoiceStatus("error");
-        setTimeout(() => {
-          setVoiceStatus("idle");
-        }, 3000);
+        setTimeout(() => setVoiceStatus("idle"), 3500);
       };
 
       recognition.onend = () => {
-        isListeningRef.current = false;
-        console.log("[VoiceAgent] Speech recognition session concluded.");
+        isStartingRef.current = false;
+        console.log("[VoiceAgent] Speech session onend.");
+        if (latestSpeechRef.current.trim() && isListeningRef.current) {
+          isListeningRef.current = false;
+          commitSpeechAndSend();
+        } else {
+          isListeningRef.current = false;
+          setVoiceStatus((prev) => (prev === "listening" ? "idle" : prev));
+        }
       };
 
       recognitionRef.current = recognition;
       recognition.start();
-    } catch (error) {
-      console.error("[VoiceAgent] Failed to initiate speech recognition:", error);
+    } catch (error: any) {
+      console.warn("[VoiceAgent] Could not start recognition:", error?.message || error);
+      isStartingRef.current = false;
+      if (error?.message?.includes("already started")) {
+        isListeningRef.current = true;
+        setVoiceStatus("listening");
+        return;
+      }
       isListeningRef.current = false;
       setVoiceStatus("error");
-      setErrorMessage("Could not activate microphone recognition.");
+      setErrorMessage("Could not activate microphone. Please tap again or use manual location entry below.");
+      setTimeout(() => setVoiceStatus("idle"), 3000);
     }
-  }, [defaultLanguage, isSupported, sendTranscriptToApi]);
+  }, [selectedLanguage, commitSpeechAndSend]);
+
+  // Ref to always provide the freshest startListening to background handlers
+  const startListeningRef = useRef(startListening);
+  useEffect(() => {
+    startListeningRef.current = startListening;
+  }, [startListening]);
 
   // -------------------------------------------------------------
-  // 3. Media Session Hijack & Silent Audio Loop
+  // 4. Media Session Earphone Hardware Trigger
   // -------------------------------------------------------------
   useEffect(() => {
     if (typeof window === "undefined") return;
 
-    // Check browser compatibility for speech recognition
     const hasSpeech = Boolean(
-      window.SpeechRecognition || window.webkitSpeechRecognition
+      (window as any).SpeechRecognition || (window as any).webkitSpeechRecognition
     );
     setIsSupported(hasSpeech);
 
-    // Create & setup looping silent audio element
-    // Uses lightweight silent WAV data URI fallback to guarantee zero network latency
-    const silentAudioDataUri =
-      "data:audio/wav;base64,UklGRjIAAABXQVZFZm10IBIAAAABAAEAQB8AAEAfAAABAAgAAABkYXRhEgAAAAAAAACAgICAgICAgICAgICA";
-
-    const audio = new Audio();
-    audio.src = "/silent.wav";
-    audio.loop = true;
-    audio.preload = "auto";
-    audio.setAttribute("playsinline", "true");
-    audio.setAttribute("webkit-playsinline", "true");
-    audioRef.current = audio;
-
-    // Fallback if public silent.wav fails to load
-    audio.onerror = () => {
-      console.log("[VoiceAgent] Falling back to inline silent data URI.");
-      audio.src = silentAudioDataUri;
-    };
-
-    // Attempt starting the silent audio playback to register MediaSession
-    const playSilentAudio = async () => {
-      try {
-        await audio.play();
-        setAudioPlaying(true);
-        console.log("[VoiceAgent] Silent background audio running. Earphone hooks active.");
-      } catch (err) {
-        console.warn(
-          "[VoiceAgent] Autoplay prevented until user interaction. Will engage upon rider tap.",
-          err
-        );
-        setAudioPlaying(false);
-      }
-    };
-
-    playSilentAudio();
-
-    // Setup Media Session API handlers
     if ("mediaSession" in navigator) {
       try {
         navigator.mediaSession.metadata = new MediaMetadata({
           title: "VoiceSarathi Earphone Listener",
           artist: "Zero-Touch Smart Helmet",
-          album: "Bangla bn-IN Trigger Mode",
-          artwork: [
-            {
-              src: "/icon-192.png",
-              sizes: "192x192",
-              type: "image/png",
-            },
-          ],
+          album: "Multilingual Kolkata HUD",
+          artwork: [{ src: "/icon-192.png", sizes: "192x192", type: "image/png" }],
         });
 
-        // Handler for earphone button click (Single click on earphones sends play or pause)
         const handleEarphoneButtonTrigger = () => {
-          console.log("[VoiceAgent] Earphone button pressed! Activating VoiceSarathi...");
-
-          // Keep audio playing so the session remains hijacked
-          if (audioRef.current && audioRef.current.paused) {
-            audioRef.current.play().catch(() => {});
+          if (isListeningRef.current) {
+            commitSpeechAndSend();
+          } else {
+            startListeningRef.current();
           }
-
-          startListening();
         };
 
-        // Hijack play and pause actions
         navigator.mediaSession.setActionHandler("play", handleEarphoneButtonTrigger);
         navigator.mediaSession.setActionHandler("pause", handleEarphoneButtonTrigger);
-
-        // Also hijack previous/next track in case the rider uses double clicks or headset remotes
         navigator.mediaSession.setActionHandler("nexttrack", handleEarphoneButtonTrigger);
         navigator.mediaSession.setActionHandler("previoustrack", handleEarphoneButtonTrigger);
 
         setMediaSessionActive(true);
-        console.log("[VoiceAgent] navigator.mediaSession action handlers bound successfully.");
-      } catch (mediaError) {
-        console.warn("[VoiceAgent] MediaSession handler registration warning:", mediaError);
-      }
+      } catch { }
     }
 
     return () => {
-      if (audioRef.current) {
-        audioRef.current.pause();
-        audioRef.current.src = "";
-      }
-      if (recognitionRef.current && isListeningRef.current) {
+      if (silenceTimerRef.current) clearTimeout(silenceTimerRef.current);
+      if (recognitionRef.current) {
         try {
           recognitionRef.current.abort();
-        } catch {}
+        } catch { }
+        recognitionRef.current = null;
       }
       if ("mediaSession" in navigator) {
         try {
@@ -293,188 +419,307 @@ export default function VoiceAgent({
           navigator.mediaSession.setActionHandler("pause", null);
           navigator.mediaSession.setActionHandler("nexttrack", null);
           navigator.mediaSession.setActionHandler("previoustrack", null);
-        } catch {}
+        } catch { }
       }
     };
-  }, [startListening]);
+  }, [commitSpeechAndSend]);
 
-  // Ensure audio plays if active state flips or user interacts
-  const handleManualAudioResume = async () => {
-    if (audioRef.current && !audioPlaying) {
-      try {
-        await audioRef.current.play();
-        setAudioPlaying(true);
-      } catch (e) {
-        console.warn("[VoiceAgent] Could not play audio:", e);
-      }
+  // -------------------------------------------------------------
+  // 5. Mic Button Tap Handler
+  // -------------------------------------------------------------
+  const handleMicClick = () => {
+    // If currently listening, tap commits speech immediately
+    if (voiceStatus === "listening" || isListeningRef.current) {
+      commitSpeechAndSend();
+      return;
     }
+
+    if (voiceStatus === "processing" || isStartingRef.current) {
+      return;
+    }
+
     startListening();
+  };
+
+  // -------------------------------------------------------------
+  // 6. Manual Entry Handlers
+  // -------------------------------------------------------------
+  const handleManualSubmit = (e: React.FormEvent) => {
+    e.preventDefault();
+    if (!manualInput.trim()) return;
+    const query = manualInput.trim();
+    setManualInput("");
+    setTranscript(query);
+    setInterimText("");
+    sendTranscriptToApi(query);
+  };
+
+  const handleQuickChipSelect = (chipText: string) => {
+    // Strip emoji prefixes if present
+    const cleanText = chipText.replace(/^[\p{Emoji}\s]+/u, "").trim();
+    setTranscript(chipText);
+    setInterimText("");
+    sendTranscriptToApi(cleanText || chipText);
   };
 
   return (
     <div className="w-full flex flex-col items-center">
-      {/* Compatibility Notice if Speech API is absent */}
       {!isSupported && (
         <div className="w-full mb-4 p-3 bg-amber-950/80 border-2 border-amber-500 rounded-xl flex items-center gap-3 text-amber-200 text-sm">
           <AlertTriangle className="w-5 h-5 flex-shrink-0 text-amber-400" />
           <span>
-            <strong>Browser Notice:</strong> Web Speech API is missing. For full Bengali earphone
-            voice control, open VoiceSarathi in Google Chrome on your device.
+            <strong>Browser Notice:</strong> Speech Recognition is unavailable in this browser. You can use the manual location entry below.
           </span>
         </div>
       )}
 
-      {/* Main Voice Status Hub */}
-      <div className="w-full relative overflow-hidden bg-black border-2 border-neutral-700/80 rounded-2xl p-5 shadow-2xl">
-        {/* Glow accent based on voice state */}
-        <div
-          className={`absolute -top-16 -left-16 w-36 h-36 rounded-full blur-3xl opacity-40 transition-colors duration-500 pointer-events-none ${
-            voiceStatus === "listening"
-              ? "bg-[#00f0ff]"
-              : voiceStatus === "processing"
-              ? "bg-[#ffee00]"
-              : voiceStatus === "success"
-              ? "bg-[#00ff88]"
-              : "bg-blue-600/30"
-          }`}
-        />
-
-        {/* Top telemetry bar of voice agent */}
-        <div className="flex items-center justify-between border-b border-neutral-800 pb-3 mb-4">
+      {/* Main Voice & Entry Hub */}
+      <div className={`w-full relative overflow-hidden border rounded-3xl p-5 shadow-2xl backdrop-blur-xl transition-colors ${isLight ? "bg-white border-slate-200 text-slate-800" : "bg-slate-900/90 border-slate-800 text-slate-200"}`}>
+        {/* Header: Earphone Status + Language Selector */}
+        <div className={`flex flex-wrap items-center justify-between border-b pb-3 mb-4 gap-2 ${isLight ? "border-slate-100" : "border-slate-800/80"}`}>
           <div className="flex items-center gap-2">
-            <Headphones
-              className={`w-5 h-5 ${
-                mediaSessionActive && audioPlaying ? "text-[#00ff88]" : "text-neutral-500"
-              }`}
+            <span
+              className={`w-2 h-2 rounded-full ${mediaSessionActive ? "bg-emerald-400 animate-pulse" : "bg-slate-600"
+                }`}
             />
-            <span className="text-xs font-mono tracking-wider uppercase text-neutral-300">
-              Earphone Hijack:{" "}
+            <Headphones
+              className={`w-4 h-4 ${mediaSessionActive ? "text-emerald-400" : "text-slate-500"
+                }`}
+            />
+            <span className={`text-xs font-medium ${isLight ? "text-slate-600" : "text-slate-300"}`}>
+              Earphone:{" "}
               {mediaSessionActive ? (
-                <span className="text-[#00ff88] font-bold">READY (Zero-Touch)</span>
+                <span className="text-emerald-400 font-semibold">Active (Zero-Touch)</span>
               ) : (
-                <span className="text-neutral-500">STANDBY</span>
+                <span className="text-slate-500">Standby</span>
               )}
             </span>
           </div>
 
-          <div className="flex items-center gap-1.5 px-2.5 py-0.5 rounded-full bg-neutral-900 border border-neutral-700 text-[11px] font-mono text-[#00f0ff]">
-            <Radio className="w-3 h-3 animate-pulse" />
-            <span>bn-IN (বাংলা)</span>
+          {/* Multilingual Speech Language Toggle (Segmented control) */}
+          <div className={`flex items-center p-0.5 rounded-xl text-xs font-medium border ${isLight ? "bg-slate-100 border-slate-200" : "bg-slate-950/80 border-slate-800"}`}>
+            {[
+              { code: "bn-IN", label: "বাংলা" },
+              { code: "hi-IN", label: "हिन्दी" },
+              { code: "en-IN", label: "English" },
+            ].map(({ code, label }) => (
+              <button
+                key={code}
+                type="button"
+                onClick={() => {
+                  setSelectedLanguage(code);
+                  console.log("[VoiceAgent] Language switched to:", code);
+                }}
+                className={`px-3 py-1 rounded-lg transition-colors cursor-pointer ${selectedLanguage === code ? (isLight ? "bg-white text-slate-900 font-semibold shadow-sm" : "bg-slate-800 text-white font-semibold shadow-sm") : (isLight ? "text-slate-500 hover:text-slate-900" : "text-slate-400 hover:text-slate-200")
+                  }`}
+              >
+                {label}
+              </button>
+            ))}
           </div>
         </div>
 
-        {/* Central interactive voice visualizer */}
-        <div className="flex flex-col items-center justify-center py-4">
+        {/* Central interactive voice dial */}
+        <div className="flex flex-col items-center justify-center py-2">
           <button
-            onClick={handleManualAudioResume}
+            onClick={handleMicClick}
             type="button"
-            className={`relative flex items-center justify-center w-28 h-28 rounded-full border-4 transition-all duration-300 active:scale-95 cursor-pointer ${
-              voiceStatus === "listening"
-                ? "border-[#00f0ff] bg-[#00f0ff]/20 animate-radar shadow-[0_0_40px_rgba(0,240,255,0.6)]"
-                : voiceStatus === "processing"
-                ? "border-[#ffee00] bg-[#ffee00]/20 animate-pulse shadow-[0_0_30px_rgba(255,238,0,0.5)]"
+            className={`relative flex items-center justify-center w-[84px] h-[84px] rounded-full transition-all duration-300 active:scale-95 cursor-pointer ${voiceStatus === "listening"
+              ? "bg-gradient-to-b from-emerald-950/70 to-slate-900 border-2 border-emerald-400 text-emerald-400 shadow-[0_0_24px_rgba(16,185,129,0.3)]"
+              : voiceStatus === "processing"
+                ? "bg-slate-800 border-2 border-sky-400/80 text-sky-400 shadow-[0_0_20px_rgba(14,165,233,0.25)]"
                 : voiceStatus === "success"
-                ? "border-[#00ff88] bg-[#00ff88]/20 shadow-[0_0_30px_rgba(0,255,136,0.5)]"
-                : "border-neutral-700 bg-neutral-900/90 hover:border-neutral-500"
-            }`}
-            aria-label="Activate voice listener or tap to speak"
+                  ? "bg-slate-800 border-2 border-emerald-400 text-emerald-400"
+                  : isLight ? "bg-gradient-to-b from-slate-50 via-slate-100 to-slate-200 border border-slate-300 text-slate-700 hover:border-slate-400 shadow-md" : "bg-gradient-to-b from-slate-800 via-slate-800/90 to-slate-900 border border-slate-700/80 text-slate-200 hover:border-slate-500 shadow-md"
+              }`}
+            aria-label="Tap to speak or tap while listening to finish"
           >
             {voiceStatus === "listening" ? (
-              <div className="flex items-center gap-1">
-                <div className="w-1.5 bg-[#00f0ff] rounded-full listening-bar-1" />
-                <div className="w-1.5 bg-[#00f0ff] rounded-full listening-bar-2" />
-                <div className="w-1.5 bg-[#00f0ff] rounded-full listening-bar-3" />
-                <div className="w-1.5 bg-[#00f0ff] rounded-full listening-bar-4" />
-                <div className="w-1.5 bg-[#00f0ff] rounded-full listening-bar-5" />
+              <div className="flex flex-col items-center gap-1.5">
+                <div className="flex items-center gap-1">
+                  <div className="w-1 bg-emerald-400 rounded-full listening-bar-1" />
+                  <div className="w-1 bg-emerald-400 rounded-full listening-bar-2" />
+                  <div className="w-1 bg-emerald-400 rounded-full listening-bar-3" />
+                  <div className="w-1 bg-emerald-400 rounded-full listening-bar-4" />
+                  <div className="w-1 bg-emerald-400 rounded-full listening-bar-5" />
+                </div>
+                <span className="text-[9px] text-emerald-300 uppercase font-bold tracking-wider">
+                  Done
+                </span>
               </div>
             ) : voiceStatus === "processing" ? (
-              <Loader2 className="w-12 h-12 text-[#ffee00] animate-spin" />
+              <Loader2 className="w-8 h-8 text-sky-400 animate-spin" />
             ) : voiceStatus === "success" ? (
-              <CheckCircle2 className="w-12 h-12 text-[#00ff88]" />
+              <CheckCircle2 className="w-8 h-8 text-emerald-400" />
             ) : (
-              <Mic className="w-12 h-12 text-white" />
+              <Mic className={`w-8 h-8 ${isLight ? "text-slate-700" : "text-slate-200"}`} />
             )}
           </button>
 
           {/* Primary Status Text Badge */}
-          <div className="mt-4 text-center">
+          <div className="mt-3.5 text-center">
             <span
-              className={`inline-block px-4 py-1 rounded-md text-sm font-black tracking-widest uppercase ${
-                voiceStatus === "listening"
-                  ? "bg-[#00f0ff] text-black shadow-lg"
-                  : voiceStatus === "processing"
-                  ? "bg-[#ffee00] text-black shadow-lg"
+              className={`inline-block px-3.5 py-1 rounded-full text-xs font-medium tracking-wide ${voiceStatus === "listening"
+                ? "bg-emerald-500/15 border border-emerald-500/30 text-emerald-300"
+                : voiceStatus === "processing"
+                  ? "bg-sky-500/15 border border-sky-500/30 text-sky-300"
                   : voiceStatus === "success"
-                  ? "bg-[#00ff88] text-black"
-                  : "bg-neutral-800 text-neutral-300"
-              }`}
+                    ? "bg-emerald-500/15 border border-emerald-500/30 text-emerald-300"
+                    : isLight
+                      ? "bg-slate-100 border border-slate-300 text-slate-700 shadow-sm"
+                      : "bg-slate-800/80 border border-slate-700/70 text-slate-300"
+                }`}
             >
               {voiceStatus === "listening" && "Listening..."}
-              {voiceStatus === "processing" && "Processing..."}
-              {voiceStatus === "success" && "Destination Found"}
-              {voiceStatus === "idle" && "Zero-Touch Standby"}
-              {voiceStatus === "error" && "Recognition Retry"}
+              {voiceStatus === "processing" && "Locating..."}
+              {voiceStatus === "success" && "Location Ready"}
+              {voiceStatus === "idle" && "Tap to Speak"}
+              {voiceStatus === "error" && "Tap to Retry"}
             </span>
 
-            <p className="text-xs text-neutral-400 mt-2 font-medium">
-              {voiceStatus === "listening"
-                ? "Speak your destination in Bengali (e.g. 'হাওড়া স্টেশন যাব')"
-                : "Press earphone button once or tap the helmet mic"}
+            <p className={`text-xs mt-1.5 ${isLight ? "text-slate-500" : "text-slate-400"}`}>
+              {voiceStatus === "listening" ? (
+                <span>
+                  Listening to voice... <strong className="text-emerald-300 font-semibold">Tap mic when done</strong>.
+                </span>
+              ) : (
+                "Tap mic or click earphone button to speak"
+              )}
             </p>
           </div>
         </div>
 
-        {/* Live Bengali Audio Transcript Display Box */}
+        {/* Live Audio Transcript Display Box */}
         {(interimText || transcript) && (
-          <div className="mt-4 p-3 bg-neutral-900/90 border border-neutral-700 rounded-xl">
-            <div className="text-[11px] font-mono text-neutral-400 mb-1 flex items-center justify-between">
-              <span>LIVE VOICE STREAM</span>
-              <span className="text-[#00f0ff]">bn-IN</span>
+          <div className={`mt-4 p-3.5 rounded-2xl border ${isLight ? "bg-slate-50 border-slate-200 text-slate-900" : "bg-slate-950/90 border-slate-800 text-white"}`}>
+            <div className="text-[11px] font-medium text-slate-400 mb-1 flex items-center justify-between">
+              <span>LIVE SPEECH</span>
+              <span className="text-emerald-400 font-semibold">{selectedLanguage}</span>
             </div>
-            <div className="text-lg font-bold text-white leading-relaxed">
+            <div className={`text-sm font-semibold leading-relaxed ${isLight ? "text-slate-900" : "text-white"}`}>
               {transcript || interimText}
-              {interimText && <span className="inline-block w-2 h-4 ml-1 bg-[#00f0ff] animate-ping" />}
+              {interimText && <span className="inline-block w-1.5 h-3.5 ml-1 bg-emerald-400 animate-pulse" />}
             </div>
+            {voiceStatus === "listening" && (
+              <div className="mt-2.5 flex items-center justify-end">
+                <button
+                  type="button"
+                  onClick={commitSpeechAndSend}
+                  className="px-3 py-1 rounded-lg bg-emerald-600 hover:bg-emerald-500 text-white text-xs font-semibold flex items-center gap-1 active:scale-95 transition-all cursor-pointer"
+                >
+                  <Check className="w-3.5 h-3.5 stroke-[2.5]" />
+                  <span>Done Speaking</span>
+                </button>
+              </div>
+            )}
           </div>
         )}
 
         {/* Extracted Destination Display Card */}
         {lastExtractedDestination && (
-          <div className="mt-3 p-3.5 bg-gradient-to-r from-emerald-950/80 to-neutral-900 border-2 border-[#00ff88] rounded-xl flex items-center justify-between">
-            <div className="flex items-center gap-3">
-              <div className="w-9 h-9 rounded-lg bg-[#00ff88]/20 flex items-center justify-center text-[#00ff88]">
-                <Volume2 className="w-5 h-5" />
+          <div className={`mt-3.5 p-3.5 rounded-2xl border flex items-center justify-between ${isLight ? "bg-slate-50 border-slate-200" : "bg-slate-950 border-slate-800"}`}>
+            <div className="flex items-center gap-3 min-w-0">
+              <div className="w-8 h-8 rounded-lg bg-emerald-500/15 text-emerald-400 flex items-center justify-center flex-shrink-0">
+                <Volume2 className="w-4 h-4" />
               </div>
-              <div>
-                <div className="text-[10px] font-mono tracking-wider text-emerald-400 uppercase font-bold">
-                  Navigating To
+              <div className="min-w-0">
+                <div className="text-[10px] text-slate-400 uppercase tracking-wider font-semibold">
+                  Captured Voice Target
                 </div>
-                <div className="text-base font-extrabold text-white">
+                <div className={`text-sm font-semibold truncate ${isLight ? "text-slate-900" : "text-white"}`}>
                   {lastExtractedDestination}
                 </div>
               </div>
             </div>
-            <span className="text-xs font-mono bg-[#00ff88] text-black font-extrabold px-2.5 py-1 rounded">
-              CONFIRMED
-            </span>
+            <div className="flex items-center gap-1.5 ml-2 flex-shrink-0">
+              <span className="text-[10px] bg-emerald-950/60 border border-emerald-500/30 text-emerald-300 font-semibold px-2 py-0.5 rounded-md">
+                Captured
+              </span>
+              <button
+                type="button"
+                onClick={() => {
+                  setLastExtractedDestination(null);
+                  setTranscript("");
+                  setInterimText("");
+                  if (typeof window !== "undefined" && "speechSynthesis" in window) {
+                    window.speechSynthesis.cancel();
+                  }
+                  if (onDeselect) onDeselect();
+                }}
+                className="p-1.5 rounded-lg bg-slate-800 text-slate-400 hover:text-white hover:bg-rose-950/60 hover:text-rose-300 transition-colors cursor-pointer"
+                title="Deselect location"
+              >
+                <X className="w-3.5 h-3.5" />
+              </button>
+            </div>
           </div>
         )}
 
-        {/* Error message if any */}
+        {/* Error message */}
         {errorMessage && (
-          <div className="mt-3 text-xs text-rose-400 bg-rose-950/50 p-2 rounded border border-rose-800 text-center font-mono">
+          <div className="mt-3 text-xs text-rose-300 bg-rose-950/50 p-2.5 rounded-xl border border-rose-900/60 text-center font-medium">
             {errorMessage}
           </div>
         )}
+
+        {/* ----------------------------------------------------------- */}
+        {/* MANUAL LOCATION ENTRY SECTION                                */}
+        {/* ----------------------------------------------------------- */}
+        <div className={`mt-5 pt-4 border-t ${isLight ? "border-slate-100" : "border-slate-800"}`}>
+          <div className="flex items-center justify-between mb-2.5">
+            <span className={`text-xs font-semibold uppercase tracking-wider flex items-center gap-1.5 ${isLight ? "text-slate-700" : "text-slate-300"}`}>
+              <Keyboard className="w-4 h-4 text-emerald-400" />
+              <span>Search Destination</span>
+            </span>
+            <span className="text-[11px] text-slate-400">
+              Supports &quot;via&quot; reroutes
+            </span>
+          </div>
+
+          <form onSubmit={handleManualSubmit} className="flex gap-2">
+            <div className="relative flex-1">
+              <Navigation className="w-4 h-4 text-slate-500 absolute left-3.5 top-1/2 -translate-y-1/2 pointer-events-none" />
+              <input
+                type="text"
+                value={manualInput}
+                onChange={(e) => setManualInput(e.target.value)}
+                placeholder="Search place, metro, cafe, or route (e.g. South City Mall via EM Bypass)..."
+                className={`w-full border rounded-xl pl-10 pr-3.5 py-2.5 text-xs font-medium focus:outline-none transition-colors ${isLight ? "bg-slate-50 border-slate-200 text-slate-900 placeholder-slate-400 focus:border-emerald-500" : "bg-slate-950 border-slate-800 text-slate-100 placeholder-slate-500 focus:border-slate-600"}`}
+              />
+            </div>
+            <button
+              type="submit"
+              disabled={!manualInput.trim()}
+              className="px-4 py-2.5 rounded-xl bg-emerald-600 hover:bg-emerald-500 text-white font-semibold text-xs tracking-wide flex items-center gap-1.5 disabled:opacity-40 disabled:cursor-not-allowed active:scale-95 transition-all cursor-pointer flex-shrink-0"
+            >
+              <span>Set</span>
+              <ArrowRight className="w-3.5 h-3.5 stroke-[2.5]" />
+            </button>
+          </form>
+
+          {/* Quick Kolkata Landmark Chips */}
+          <div className="mt-3 flex flex-wrap gap-1.5">
+            {QUICK_KOLKATA_CHIPS.map((chip) => (
+              <button
+                key={chip}
+                type="button"
+                onClick={() => handleQuickChipSelect(chip)}
+                className={`px-3 py-1.5 rounded-xl border text-[11px] font-medium transition-all active:scale-95 cursor-pointer ${isLight ? "bg-slate-100 hover:bg-slate-200 border-slate-200 text-slate-700 hover:text-slate-900" : "bg-slate-800/60 hover:bg-slate-800 border-slate-700/60 hover:border-slate-600 text-slate-300 hover:text-white"}`}
+              >
+                + {chip}
+              </button>
+            ))}
+          </div>
+        </div>
       </div>
 
       {/* Earphone Button Quick Instruction Helper */}
-      <div className="mt-3 w-full bg-neutral-950 border border-neutral-800 rounded-xl px-4 py-2.5 flex items-center justify-between text-xs text-neutral-400">
+      <div className={`mt-3 w-full border rounded-2xl px-4 py-2.5 flex items-center justify-between text-xs ${isLight ? "bg-slate-100/80 border-slate-200 text-slate-600" : "bg-slate-900/60 border-slate-800/80 text-slate-400"}`}>
         <span className="flex items-center gap-2">
-          <span className="inline-block w-2 h-2 rounded-full bg-[#00ff88] animate-ping" />
-          Earphone Hardware Trigger
+          <span className="w-2 h-2 rounded-full bg-emerald-400" />
+          Earphone Button Trigger
         </span>
-        <span className="font-mono text-neutral-300">Single Click = Talk</span>
+        <span className={`font-medium ${isLight ? "text-slate-800" : "text-slate-300"}`}>Single Click = Talk / Finish</span>
       </div>
     </div>
   );

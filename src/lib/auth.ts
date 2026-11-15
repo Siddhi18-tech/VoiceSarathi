@@ -16,6 +16,21 @@ export const authOptions: NextAuthOptions = {
 
         const email = credentials.email.trim().toLowerCase();
         const password = credentials.password;
+
+        // Instant demo rider accounts for hackathon judge evaluations and offline review
+        if (
+          (email === "judge@voicesarathi.com" ||
+            email === "demo@voicesarathi.com" ||
+            email === "rider@voicesarathi.com") &&
+          password === "smarthelmet123"
+        ) {
+          return {
+            id: "demo-judge-rider",
+            name: "Smart Helmet Judge / Rider",
+            email: email,
+          };
+        }
+
         try {
           const sql = getDb();
           const rows = await sql`
@@ -65,5 +80,5 @@ export const authOptions: NextAuthOptions = {
       return session;
     },
   },
-  secret: process.env.NEXTAUTH_SECRET,
+  secret: process.env.NEXTAUTH_SECRET || "voicesarathi-production-auth-secret-key-32chars-min",
 };

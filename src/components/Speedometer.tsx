@@ -21,6 +21,10 @@ export interface SpeedometerProps {
    * Whether to display in compact HUD overlay mode (for embedding directly on top of the map)
    */
   overlayMode?: boolean;
+  /**
+   * Theme mode: "dark" or "light"
+   */
+  theme?: "dark" | "light";
 }
 
 type GPSStatus = "acquiring" | "active" | "denied" | "unavailable" | "mock";
@@ -32,6 +36,7 @@ export default function Speedometer({
   onSpeedUpdate,
   className = "",
   overlayMode = false,
+  theme = "dark",
 }: SpeedometerProps) {
   const [speedKmh, setSpeedKmh] = useState<number>(0);
   const [maxSpeedSeen, setMaxSpeedSeen] = useState<number>(0);
@@ -182,48 +187,58 @@ export default function Speedometer({
     ? "#FFEE00" // Caution Yellow
     : "#00FF88"; // High-visibility Neon Green
 
+  const isLight = theme === "light";
+
   // Compact Overlay Mode (Directly floating on the Map)
   if (overlayMode) {
     return (
       <div
-        className={`bg-black/90 backdrop-blur-md border-2 rounded-2xl p-3 shadow-2xl transition-all duration-300 ${
-          isOverLimit
-            ? "border-[#FF2A55] shadow-[0_0_25px_rgba(255,42,85,0.6)]"
-            : "border-neutral-700"
+        className={`backdrop-blur-md border rounded-2xl p-3 shadow-2xl transition-all duration-300 ${
+          isLight
+            ? isOverLimit
+              ? "bg-white/95 border-rose-500 shadow-[0_0_25px_rgba(244,63,94,0.3)] text-slate-900"
+              : "bg-white/95 border-slate-300 text-slate-900 shadow-lg"
+            : isOverLimit
+            ? "bg-black/90 border-[#FF2A55] shadow-[0_0_25px_rgba(255,42,85,0.6)] text-white"
+            : "bg-black/90 border-neutral-700 text-white"
         } ${className}`}
       >
         <div className="flex items-center justify-between gap-3">
           <div>
-            <div className="flex items-center gap-1.5 text-[10px] font-mono text-neutral-400 uppercase">
-              <Navigation className="w-3 h-3 text-[#00F0FF]" />
+            <div className={`flex items-center gap-1.5 text-[10px] font-mono uppercase ${isLight ? "text-slate-500 font-semibold" : "text-neutral-400"}`}>
+              <Navigation className={`w-3 h-3 ${isLight ? "text-sky-600" : "text-[#00F0FF]"}`} />
               <span>LIVE SPEED</span>
             </div>
             <div className="flex items-baseline gap-1">
               <span
                 className="text-4xl sm:text-5xl font-black font-mono tracking-tighter"
-                style={{ color: speedColor }}
+                style={{ color: isLight && !isOverLimit ? "#059669" : speedColor }}
               >
                 {speedKmh}
               </span>
-              <span className="text-xs font-mono font-bold text-neutral-400 uppercase">km/h</span>
+              <span className={`text-xs font-mono font-bold uppercase ${isLight ? "text-slate-600" : "text-neutral-400"}`}>km/h</span>
             </div>
           </div>
 
           <div className="flex flex-col items-end gap-1">
-            <div className="text-[10px] font-mono text-neutral-400">
-              LIMIT: <span className="font-bold text-white">{speedLimit}</span>
+            <div className={`text-[10px] font-mono ${isLight ? "text-slate-600 font-semibold" : "text-neutral-400"}`}>
+              LIMIT: <span className={`font-bold ${isLight ? "text-slate-900" : "text-white"}`}>{speedLimit}</span>
             </div>
             <div
               className={`px-2 py-0.5 rounded-full text-[9px] font-mono font-bold border ${
                 gpsStatus === "active"
-                  ? "border-[#00FF88] text-[#00FF88] bg-[#00FF88]/10"
+                  ? isLight
+                    ? "border-emerald-600 text-emerald-700 bg-emerald-50"
+                    : "border-[#00FF88] text-[#00FF88] bg-[#00FF88]/10"
+                  : isLight
+                  ? "border-slate-300 text-slate-600 bg-slate-100"
                   : "border-neutral-600 text-neutral-400 bg-neutral-900"
               }`}
             >
               {gpsStatus === "active" ? "GPS LIVE" : "GPS MOCK"}
             </div>
             {isSpeaking && (
-              <span className="text-[9px] font-mono text-[#FFEE00] animate-pulse">
+              <span className={`text-[9px] font-mono animate-pulse ${isLight ? "text-amber-600 font-bold" : "text-[#FFEE00]"}`}>
                 Slow Down!
               </span>
             )}

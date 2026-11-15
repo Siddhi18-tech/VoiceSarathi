@@ -69,7 +69,9 @@ export default function RegisterPage() {
       const data = await response.json();
 
       if (!response.ok) {
-        throw new Error(data.error || "Failed to create account. Please try again.");
+        setErrorMessage(data.error || "Failed to create account. Please try again.");
+        setIsLoading(false);
+        return;
       }
 
       setSuccessStep(true);
@@ -94,7 +96,7 @@ export default function RegisterPage() {
         router.refresh();
       }
     } catch (err: any) {
-      console.error("[Register Error]", err);
+      console.warn("[Register Warning]", err);
       setErrorMessage(err.message || "An error occurred during registration.");
       setIsLoading(false);
       setSuccessStep(false);
@@ -127,9 +129,21 @@ export default function RegisterPage() {
 
         {/* Error Alert Display */}
         {errorMessage && (
-          <div className="mb-5 p-3.5 rounded-xl bg-rose-950/80 border-2 border-rose-600 text-rose-200 text-xs font-mono flex items-start gap-2.5 animate-pulse">
+          <div className="mb-5 p-3.5 rounded-xl bg-rose-950/80 border-2 border-rose-600 text-rose-200 text-xs font-mono flex items-start gap-2.5">
             <AlertCircle className="w-4 h-4 text-rose-400 flex-shrink-0 mt-0.5" />
-            <span>{errorMessage}</span>
+            <div className="flex-1">
+              <span>{errorMessage}</span>
+              {errorMessage.toLowerCase().includes("already exists") && (
+                <div className="mt-2">
+                  <Link
+                    href={`/login?email=${encodeURIComponent(email)}`}
+                    className="inline-flex items-center gap-1 text-[#00ff88] font-bold hover:underline"
+                  >
+                    Click here to Log In &rarr;
+                  </Link>
+                </div>
+              )}
+            </div>
           </div>
         )}
 
