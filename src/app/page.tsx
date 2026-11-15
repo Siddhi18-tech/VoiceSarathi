@@ -87,6 +87,28 @@ type RouteApiResponse = {
   error?: string;
 };
 
+function distanceBetweenPoints(
+  from: { lat: number; lng: number },
+  to: { lat: number; lng: number }
+) {
+  const toRadians = (degrees: number) => degrees * Math.PI / 180;
+  const dLat = toRadians(to.lat - from.lat);
+  const dLng = toRadians(to.lng - from.lng);
+  const lat1 = toRadians(from.lat);
+  const lat2 = toRadians(to.lat);
+  const a = Math.sin(dLat / 2) ** 2 +
+    Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLng / 2) ** 2;
+  return 6_371_000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
+}
+
+function speakNavigationInstruction(text: string, language: string) {
+  if (typeof window === "undefined" || !("speechSynthesis" in window)) return;
+  const utterance = new SpeechSynthesisUtterance(text);
+  utterance.lang = language || "en-IN";
+  utterance.rate = 0.95;
+  window.speechSynthesis.speak(utterance);
+}
+
 export default function RiderDashboard() {
   const { data: session } = useSession();
 
@@ -230,6 +252,12 @@ export default function RiderDashboard() {
   const rideDistanceMetersRef = useRef(0);
   const previousRidePositionRef = useRef<{ lat: number; lng: number } | null>(null);
   const maxRideSpeedRef = useRef(0);
+  const navigationStepsRef = useRef<RouteApiResponse["steps"]>([]);
+  const navigationStepIndexRef = useRef(0);
+  const navigationDistanceIntoStepRef = useRef(0);
+  const previousNavigationPositionRef = useRef<{ lat: number; lng: number } | null>(null);
+  const navigationActiveRef = useRef(false);
+  const navigationLanguageRef = useRef(DEFAULT_SETTINGS.language);
 
   // Google Maps API key placeholder
   const googleMapsApiKey =
@@ -314,6 +342,34 @@ export default function RiderDashboard() {
         rideDistanceMetersRef.current += 6_371_000 * 2 * Math.atan2(Math.sqrt(a), Math.sqrt(1 - a));
       }
       previousRidePositionRef.current = current;
+
+      if (navigationActiveRef.current) {
+        const navigationPrevious = previousNavigationPositionRef.current;
+        if (navigationPrevious) {
+          navigationDistanceIntoStepRef.current += distanceBetweenPoints(navigationPrevious, current);
+          const steps = navigationStepsRef.current || [];
+          const currentStep = steps[navigationStepIndexRef.current];
+          const nextStep = steps[navigationStepIndexRef.current + 1];
+
+          if (currentStep && nextStep) {
+            const stepDistance = Math.max(0, currentStep.distance || 0);
+            const announceWithin = Math.min(250, Math.max(50, stepDistance * 0.25));
+            const remaining = stepDistance - navigationDistanceIntoStepRef.current;
+
+            if (remaining <= announceWithin) {
+              navigationStepIndexRef.current += 1;
+              navigationDistanceIntoStepRef.current = 0;
+              const distanceAhead = Math.max(0, Math.round(remaining / 50) * 50);
+              const distancePrompt = distanceAhead > 0 ? `In about ${distanceAhead} meters, ` : "";
+              speakNavigationInstruction(
+                `${distancePrompt}${nextStep.instruction}`,
+                navigationLanguageRef.current
+              );
+            }
+          }
+        }
+        previousNavigationPositionRef.current = current;
+      }
     }, () => { }, { enableHighAccuracy: true, maximumAge: 1000 });
     return () => navigator.geolocation.clearWatch(watchId);
   }, [isRideActive]);
@@ -366,6 +422,9 @@ export default function RiderDashboard() {
     setShowRoute(false);
     setRoutePolyline(undefined);
     setRouteSteps([]);
+    navigationStepsRef.current = [];
+    navigationActiveRef.current = false;
+    previousNavigationPositionRef.current = null;
     setDistanceText("");
     setDurationText("");
     setEtaText("");
@@ -437,6 +496,9 @@ export default function RiderDashboard() {
     setShowRoute(false);
     setRoutePolyline(undefined);
     setRouteSteps([]);
+    navigationStepsRef.current = [];
+    navigationActiveRef.current = false;
+    previousNavigationPositionRef.current = null;
     setDistanceText("");
     setDurationText("");
     setEtaText("");
@@ -454,6 +516,10 @@ export default function RiderDashboard() {
   const confirmAndStartRoute = async (dest: string | null, via?: string | null) => {
     if (!dest) return;
 
+    navigationActiveRef.current = false;
+    if (typeof window !== "undefined" && "speechSynthesis" in window) {
+      window.speechSynthesis.cancel();
+    }
     setShowRoute(false);
     setRoutePolyline(undefined);
     setRouteSteps([]);
@@ -502,7 +568,14 @@ export default function RiderDashboard() {
       setCurrentDestination(resolvedDestName);
       setViaWaypoint(resolvedViaName);
       setRoutePolyline(data.polyline);
-      setRouteSteps(data.steps || []);
+      const steps = data.steps || [];
+      setRouteSteps(steps);
+      navigationStepsRef.current = steps;
+      navigationStepIndexRef.current = 0;
+      navigationDistanceIntoStepRef.current = 0;
+      previousNavigationPositionRef.current = { lat, lng };
+      navigationActiveRef.current = steps.length > 0;
+      navigationLanguageRef.current = settings.language;
       setDistanceText(data.distanceText || "");
       setDurationText(data.durationText || "");
 
@@ -537,6 +610,18 @@ export default function RiderDashboard() {
         settings.language,
         resolvedViaName
       );
+      const firstStep = steps[0];
+      if (firstStep) {
+        const distanceText = firstStep.distance > 0
+          ? firstStep.distance >= 1000
+            ? ` Continue for about ${(firstStep.distance / 1000).toFixed(1)} kilometers.`
+            : ` Continue for about ${Math.max(10, Math.round(firstStep.distance / 10) * 10)} meters.`
+          : "";
+        speakNavigationInstruction(
+          `${firstStep.instruction}.${distanceText}`,
+          settings.language
+        );
+      }
     } catch (error) {
       setRouteError(error instanceof Error ? error.message : "Could not create a route.");
     } finally {
