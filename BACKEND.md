@@ -7,7 +7,7 @@ Copy `.env.example` to `.env.local` and supply:
 - `DATABASE_URL`: Neon pooled Postgres connection string.
 - `NEXTAUTH_SECRET`: generate a random secret for NextAuth JWT signing.
 - `NEXTAUTH_URL`: the app's canonical URL.
-- `GEMINI_API_KEY`: server-side Gemini API key. `GEMINI_MODEL` defaults to `gemini-2.5-flash`; `gemini-1.5-flash` has been shut down and cannot serve requests.
+- `GEMINI_API_KEY`: server-side Gemini API key. `GEMINI_MODEL` defaults to `gemini-3.5-flash-lite`, which supports fast text extraction. Set this variable only when selecting another model available to your Gemini API project.
 - `GOOGLE_MAPS_API_KEY`: server-side key with Geocoding API and Routes API enabled. Keep this separate from the browser key and restrict it to the deployed server where possible.
 - `TELEGRAM_BOT_TOKEN` and `TELEGRAM_CHAT_ID`: bot token and destination chat ID for SOS messages. The destination must start a conversation with the bot first, or be a group where the bot is a member.
 

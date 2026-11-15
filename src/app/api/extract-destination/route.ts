@@ -18,16 +18,19 @@ export async function POST(request: Request) {
     return NextResponse.json({ error: "Destination extraction is not configured." }, { status: 503 });
   }
 
-  const model = process.env.GEMINI_MODEL || "gemini-2.5-flash";
+  const model = process.env.GEMINI_MODEL || "gemini-3.5-flash-lite";
   try {
     const response = await fetch(
-      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent?key=${encodeURIComponent(apiKey)}`,
+      `https://generativelanguage.googleapis.com/v1beta/models/${encodeURIComponent(model)}:generateContent`,
       {
         method: "POST",
-        headers: { "Content-Type": "application/json" },
+        headers: {
+          "Content-Type": "application/json",
+          "x-goog-api-key": apiKey,
+        },
         body: JSON.stringify({
           contents: [{ parts: [{ text: `Extract ONLY the final geographical destination from this user's speech. Ignore conversational filler words in any Indian language. Reply with JUST the destination name.\n\nUser speech: ${transcript}` }] }],
-          generationConfig: { temperature: 0.1, maxOutputTokens: 80 },
+          generationConfig: { maxOutputTokens: 80 },
         }),
         signal: AbortSignal.timeout(15_000),
       }
